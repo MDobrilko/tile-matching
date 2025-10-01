@@ -48,7 +48,11 @@ impl Board {
     pub fn ceil_right(&self) -> Vec2 {
         self.bottom_left()
             + Vec2::new((BOARD_HEIGHT - 1) as f32, (BOARD_WIDTH - 1) as f32)
-                * Vec2::splat(BOARD_TILE_SIZE as f32)
+                * self.cell_size()
+    }
+
+    pub fn get_cell_coord(&self, i: usize, j: usize) -> Vec2 {
+        self.bottom_left() + Vec2::new(j as f32 * self.cell_size(), i as f32 * self.cell_size())
     }
 
     pub fn push_row(&mut self, row: Vec<Cell>) {

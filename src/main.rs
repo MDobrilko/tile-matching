@@ -24,6 +24,7 @@ fn main() -> AppExit {
                 (
                     check_board,
                     despawn_tiles.run_if(run_if_has_tiles_to_despawn),
+                    gravity,
                 )
                     .chain(),
             ),
@@ -46,8 +47,6 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let mut board = Board::new();
-
-    let start = board.bottom_left();
 
     commands.spawn((Camera2d, Transform::default()));
 
@@ -79,8 +78,9 @@ fn setup(
                 Form::Triangle => (triangle_mesh.clone(), triangle_material.clone()),
             };
 
-            let x = start.x + j as f32 * board.cell_size();
-            let y = start.y + i as f32 * board.cell_size();
+            let Vec2 { x, y } = board.get_cell_coord(i, j);
+            // let x = start.x + j as f32 * board.cell_size();
+            // let y = start.y + i as f32 * board.cell_size();
 
             let select_area_entity = commands
                 .spawn((
@@ -219,8 +219,8 @@ fn handle_click(
     let bottom_left_border_pos = game.board.bottom_left() - game.board.cell_size() / 2.;
     let upper_right_border_pos = game.board.ceil_right() + game.board.cell_size() / 2.;
 
-	// println!("Bottom left border: {bottom_left_border_pos}");
-	// println!("Upper right border: {upper_right_border_pos}");
+    // println!("Bottom left border: {bottom_left_border_pos}");
+    // println!("Upper right border: {upper_right_border_pos}");
 
     if !(mouse_world_pos.x > bottom_left_border_pos.x
         && mouse_world_pos.x < upper_right_border_pos.x
@@ -232,8 +232,8 @@ fn handle_click(
 
     let clicked_cell_pos =
         ((mouse_world_pos - bottom_left_border_pos) / game.board.cell_size()).floor();
-	
-	// println!("Clicked sell pos: {clicked_cell_pos}");
+
+    // println!("Clicked sell pos: {clicked_cell_pos}");
 
     let j = clicked_cell_pos.x as usize;
     let i = clicked_cell_pos.y as usize;
@@ -246,22 +246,22 @@ fn handle_click(
 
     if Some((i, j)) == selected {
         game.selected = None;
-    } else {
+    } else if game.board[i][j].tile.is_none() {
+		game.selected = None;
+	} else {
         game.selected = Some((i, j));
     }
 }
 
 // fn handle_right_click(world: &mut World) {
 // 	let buttons = world.get_resource::<ButtonInput<MouseButton>>().unwrap();
-// 	if !buttons.just_pressed(MouseButton::Right) {
+// 	if !buttons.pressed(MouseButton::Right) {
 // 		return;
 // 	}
 
-// 	let check_board_system_id = world.register_system(check_board);
-// 	let despawn_tiles_system_id = world.register_system(despawn_tiles);
+// 	let system_id = world.register_system(gravity);
 
-// 	world.run_system(check_board_system_id).unwrap();
-// 	world.run_system(despawn_tiles_system_id).unwrap();
+// 	world.run_system(system_id).unwrap();
 // }
 
 fn check_board(mut game: ResMut<Game>) {
@@ -333,9 +333,40 @@ fn despawn_tiles(mut game: ResMut<Game>, mut commands: Commands) {
     while let Some((i, j)) = game.tiles_to_despawn.pop() {
         if let Some(tile) = game.board[i][j].tile.take() {
             commands.entity(tile.entity).despawn();
-            game.empty_cells.push((i, j));
         }
     }
+
+    for col_id in 0..game.board.width() {
+        let last_empty = (0..game.board.height()).find_map(|i| {
+            if game.board[i][col_id].tile.is_none() {
+                Some(i)
+            } else {
+                None
+            }
+        });
+
+        if let Some(mut last_empty) = last_empty {
+            for row_id in last_empty..game.board.height() {
+                if let Some(tile) = game.board[row_id][col_id].tile.as_ref() {
+                    commands
+                        .entity(tile.entity)
+                        .insert(Falling(last_empty, col_id));
+                    last_empty += 1;
+                }
+            }
+        }
+    }
+}
+
+fn gravity(game: Res<Game>, query: Query<(&mut Transform, &Falling)>) {
+    for (mut transform, Falling(target_i, target_j)) in query {
+		let target_coord = game.board.get_cell_coord(*target_i, *target_j);
+
+		transform.translation.y -= 5.;
+		if transform.translation.y <= target_coord.y {
+			transform.translation.y = target_coord.y;
+		}
+	}
 }
 
 fn run_if_has_tiles_to_despawn(game: Res<Game>) -> bool {
@@ -348,8 +379,11 @@ struct Game {
     prev_selected: Vec<(usize, usize)>,
     selected: Option<(usize, usize)>,
     tiles_to_despawn: Vec<(usize, usize)>,
-    empty_cells: Vec<(usize, usize)>,
 }
 
 #[derive(Component)]
 struct SelectArea;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct Falling(usize, usize);
