@@ -2,7 +2,7 @@ use bevy::{math::prelude::*, prelude::*};
 
 mod board;
 
-use board::{Board, Cell, Form, Tile, TILE_VELOCITY};
+use board::{Board, BoardIndex, Cell, Form, TILE_VELOCITY, Tile};
 
 fn main() -> AppExit {
     App::new()
@@ -16,16 +16,19 @@ fn main() -> AppExit {
         .init_resource::<Board>()
         .init_resource::<Selection>()
         .init_resource::<TilesToDespawn>()
+        .init_resource::<Game>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 handle_click,
                 handle_selection,
+                move_camera,
                 (
-					move_tiles,
-                    check_board,
+                    move_tiles,
+                    check_board_for_matching,
                     despawn_tiles.run_if(run_if_has_tiles_to_despawn),
+                    spawn_tiles,
                 )
                     .chain(),
             ),
@@ -33,50 +36,90 @@ fn main() -> AppExit {
         .run()
 }
 
+fn move_camera(
+    time: Res<Time>,
+    buttons: Res<ButtonInput<KeyCode>>,
+    mut query: Single<&mut Transform, With<Camera>>,
+) {
+    let delta = 2. * TILE_VELOCITY * time.delta_secs();
+
+    if buttons.pressed(KeyCode::ArrowUp) {
+        query.translation.y += delta;
+    }
+    if buttons.pressed(KeyCode::ArrowDown) {
+        query.translation.y -= delta;
+    }
+    if buttons.pressed(KeyCode::ArrowLeft) {
+        query.translation.x -= delta;
+    }
+    if buttons.pressed(KeyCode::ArrowRight) {
+        query.translation.x += delta;
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut board: ResMut<Board>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    game: Res<Game>,
+    clear_color: Res<ClearColor>,
 ) {
-    commands.spawn((Camera2d, Transform::default()));
+    commands.spawn(Camera2d);
 
-    let cell_mesh = meshes.add(Rectangle::default());
+    let hidden_board_height = board.height() - board.visible_height();
+    let hidden_board_rectangle_mesh = game.rectangle_mesh.clone();
+    let background_material = materials.add(clear_color.0);
+    let cell_mesh = game.rectangle_mesh.clone();
     let cell_material = materials.add(Color::srgb(0.12, 0.12, 0.18));
-    let select_area_mesh = meshes.add(Rectangle::default());
-    // @FIXME Вернуть альфа канал 0.75
-    // С параметром альфа канала выглядит как будто область выделения находится над фигурой.
-    let select_area_material =
-        materials.add(Color::srgba(184. / 255., 134. / 255., 11. / 255., 1.));
-    let circle_mesh = meshes.add(Circle::new(0.4));
-    let circle_material = materials.add(Color::srgb(175. / 255., 43. / 255., 30. / 255.));
-    let square_mesh = meshes.add(Rectangle::from_size(Vec2::splat(0.8)));
-    let square_material = materials.add(Color::srgb(71. / 255., 132. / 255., 48. / 255.));
-    let triangle_mesh = meshes.add(Triangle2d::new(
-        Vec2::new(0., 0.4),
-        Vec2::new(-0.4, -0.4),
-        Vec2::new(0.4, -0.4),
+
+    let hidden_board_rectangle_pos = {
+        let bottom_left = board.bottom_left();
+        let top_right = board.top_right();
+
+        Vec3::new(
+            (bottom_left.x + top_right.x) / 2.,
+            hidden_board_height as f32 * 0.5 * board.cell_size()
+                + top_right.y
+                + board.cell_size() * 0.5,
+            100.,
+        )
+    };
+    commands.spawn((
+        Transform::from_translation(hidden_board_rectangle_pos).with_scale(Vec3::new(
+            board.cell_size() * board.width() as f32,
+            board.cell_size() * hidden_board_height as f32,
+            0.,
+        )),
+        Mesh2d(hidden_board_rectangle_mesh),
+        MeshMaterial2d(background_material),
     ));
-    let triangle_material = materials.add(Color::srgb(27. / 255., 85. / 255., 131. / 255.));
 
     for i in 0..board.height() {
         let mut row = Vec::with_capacity(board.width());
         for j in 0..board.width() {
             let form = rand::random();
             let (form_mesh, form_material) = match form {
-                Form::Circle => (circle_mesh.clone(), circle_material.clone()),
-                Form::Square => (square_mesh.clone(), square_material.clone()),
-                Form::Triangle => (triangle_mesh.clone(), triangle_material.clone()),
+                Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
+                Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
+                Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
             };
 
-            let Vec2 { x, y } = board.get_cell_coord(i, j);
-            // let x = start.x + j as f32 * board.cell_size();
-            // let y = start.y + i as f32 * board.cell_size();
+            let Vec2 { x, y } = board.get_cell_coord((i, j));
+
+            commands.spawn((
+                Mesh2d(cell_mesh.clone()),
+                MeshMaterial2d(cell_material.clone()),
+                Transform::from_xyz(x, y, 0.).with_scale(Vec3::new(
+                    board.cell_size() - board.border_width(),
+                    board.cell_size() - board.border_width(),
+                    0.,
+                )),
+            ));
 
             let select_area_entity = commands
                 .spawn((
-                    Mesh2d(select_area_mesh.clone()),
-                    MeshMaterial2d(select_area_material.clone()),
+                    Mesh2d(game.rectangle_mesh.clone()),
+                    MeshMaterial2d(game.select_area_material.clone()),
                     Transform::from_xyz(0., 0., 1.),
                     SelectArea,
                     Visibility::Hidden,
@@ -101,16 +144,6 @@ fn setup(
                 ))
                 .id();
 
-            commands.spawn((
-                Mesh2d(cell_mesh.clone()),
-                MeshMaterial2d(cell_material.clone()),
-                Transform::from_xyz(x, y, 0.).with_scale(Vec3::new(
-                    board.cell_size() - board.border_width(),
-                    board.cell_size() - board.border_width(),
-                    0.,
-                )),
-            ));
-
             row.push(Cell {
                 tile: Some(Tile {
                     form,
@@ -128,23 +161,23 @@ fn handle_selection(
     mut selection: ResMut<Selection>,
     mut commands: Commands,
 ) {
-    while let Some((i, j)) = selection.to_unselect.pop() {
-        set_selected(&mut commands, &board[i][j], false);
+    while let Some(idx) = selection.to_unselect.pop() {
+        set_selected(&mut commands, &board[idx], false);
     }
 
     if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected) {
-        let di = (last_selected.0 as isize - selected.0 as isize).abs();
-        let dj = (last_selected.1 as isize - selected.1 as isize).abs();
+        let di = (last_selected.row_id() as isize - selected.row_id() as isize).abs();
+        let dj = (last_selected.col_id() as isize - selected.col_id() as isize).abs();
 
         if di + dj == 1
-            && let Some((last_selected_tile, selected_tile)) = board[last_selected.0][last_selected.1]
+            && let Some((last_selected_tile, selected_tile)) = board[last_selected]
                 .tile
                 .as_ref()
-                .zip(board[selected.0][selected.1].tile.as_ref())
+                .zip(board[selected].tile.as_ref())
         {
-			set_selected(&mut commands, &board[selected.0][selected.1], false);
-			selection.last_selected = None;
-			selection.selected = None;
+            set_selected(&mut commands, &board[selected], false);
+            selection.last_selected = None;
+            selection.selected = None;
 
             commands
                 .entity(last_selected_tile.entity)
@@ -163,11 +196,11 @@ fn handle_selection(
                 .entity(selected_tile.entity)
                 .insert(MovingTo::from(last_selected));
 
-			let tmp = board[last_selected.0][last_selected.1].tile;
-			board[last_selected.0][last_selected.1].tile = board[selected.0][selected.1].tile;
-			board[selected.0][selected.1].tile = tmp;
+            let tmp = board[last_selected].tile;
+            board[last_selected].tile = board[selected].tile;
+            board[selected].tile = tmp;
         }
-    } else if let Some(cell) = selection.selected.map(|(i, j)| &board[i][j]) {
+    } else if let Some(cell) = selection.selected.map(|idx| &board[idx]) {
         set_selected(&mut commands, cell, true);
     }
 }
@@ -226,7 +259,7 @@ fn handle_click(
     );
 
     let bottom_left_border_pos = board.bottom_left() - board.cell_size() / 2.;
-    let upper_right_border_pos = board.ceil_right() + board.cell_size() / 2.;
+    let upper_right_border_pos = board.top_right() + board.cell_size() / 2.;
 
     // println!("Bottom left border: {bottom_left_border_pos}");
     // println!("Upper right border: {upper_right_border_pos}");
@@ -253,7 +286,7 @@ fn handle_click(
     selection.to_unselect.extend(selected);
     selection.last_selected = selected;
 
-    if Some((i, j)) == selected
+    if Some((i, j).into()) == selected
         || board[i][j].tile.as_ref().is_none_or(|tile| {
             tile_query
                 .get(tile.entity)
@@ -262,16 +295,16 @@ fn handle_click(
     {
         selection.selected = None;
     } else {
-        selection.selected = Some((i, j));
+        selection.selected = Some((i, j).into());
     }
 }
 
-fn check_board(
+fn check_board_for_matching(
     board: Res<Board>,
     mut tiles_to_despawn: ResMut<TilesToDespawn>,
     tile_query: Query<&TileState>,
 ) {
-    let n = board.width().max(board.height());
+    let n = board.width().max(board.visible_height());
 
     for i in 0..n {
         let mut form_by_row = Form::Square;
@@ -281,7 +314,7 @@ fn check_board(
 
         for j in 0..n {
             if let Some(tile) = board
-                .get(i)
+                .get_row(i)
                 .and_then(|row| row.get(j))
                 .and_then(|cell| cell.tile.as_ref())
             {
@@ -301,11 +334,11 @@ fn check_board(
                     form_by_row = tile.form;
                 }
 
-                matched_by_row.push((i, j));
+                matched_by_row.push((i, j).into());
             }
 
             if let Some(tile) = board
-                .get(j)
+                .get_row(j)
                 .and_then(|row| row.get(i))
                 .and_then(|cell| cell.tile.as_ref())
             {
@@ -325,7 +358,7 @@ fn check_board(
                     form_by_column = tile.form;
                 }
 
-                matched_by_column.push((j, i));
+                matched_by_column.push((j, i).into());
             }
         }
 
@@ -343,14 +376,14 @@ fn despawn_tiles(
     mut tiles_to_despawn: ResMut<TilesToDespawn>,
     mut commands: Commands,
 ) {
-    while let Some((i, j)) = tiles_to_despawn.0.pop() {
-        if let Some(tile) = board[i][j].tile.take() {
+    while let Some(index) = tiles_to_despawn.0.pop() {
+        if let Some(tile) = board[index].tile.take() {
             commands.entity(tile.entity).despawn();
         }
     }
 
     for col_id in 0..board.width() {
-        let last_empty = (0..board.height()).find_map(|i| {
+        let last_empty = (0..board.visible_height()).find_map(|i| {
             if board[i][col_id].tile.is_none() {
                 Some(i)
             } else {
@@ -368,11 +401,61 @@ fn despawn_tiles(
 
                     commands
                         .entity(tile.entity)
-                        .insert(MovingTo(last_empty, col_id));
+                        .insert(MovingTo::from((last_empty, col_id)));
 
                     board[last_empty][col_id].tile = Some(tile);
                     last_empty += 1;
                 }
+            }
+        }
+    }
+}
+
+fn spawn_tiles(mut board: ResMut<Board>, mut commands: Commands, game: Res<Game>) {
+    for col_id in 0..board.width() {
+        for row_id in board.visible_height()..board.height() {
+            let form = rand::random();
+            let (form_mesh, form_material) = match form {
+                Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
+                Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
+                Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
+            };
+            let Vec2 { x, y } = board.get_cell_coord((row_id, col_id));
+
+            if board[row_id][col_id].tile.is_none() {
+                let select_area_entity = commands
+                    .spawn((
+                        Mesh2d(game.rectangle_mesh.clone()),
+                        MeshMaterial2d(game.select_area_material.clone()),
+                        Transform::from_xyz(0., 0., 1.),
+                        SelectArea,
+                        Visibility::Hidden,
+                    ))
+                    .id();
+
+                let tile_entity = commands
+                    .spawn(TileBundle {
+                        transform: Transform::from_xyz(x, y, 0.5).with_scale(Vec3::new(
+                            board.cell_size() - board.border_width(),
+                            board.cell_size() - board.border_width(),
+                            0.,
+                        )),
+                        visibility: Visibility::Inherited,
+                        state: TileState::Idle,
+                    })
+                    .add_child(select_area_entity)
+                    .with_child((
+                        Mesh2d(form_mesh),
+                        MeshMaterial2d(form_material),
+                        Transform::from_xyz(0., 0., 100.).with_scale(Vec3::splat(0.95)),
+                    ))
+                    .id();
+
+                board[row_id][col_id].tile = Some(Tile {
+                    form,
+                    entity: tile_entity,
+                    select_area_entity,
+                });
             }
         }
     }
@@ -384,13 +467,14 @@ fn move_tiles(
     board: Res<Board>,
     query: Query<(Entity, &mut Transform, &mut TileState, &MovingTo)>,
 ) {
-    for (entity, mut transform, mut state, moving) in query {
-        let target_coord = board.get_cell_coord(moving.0, moving.1);
-		let direction = (target_coord - transform.translation.xy()).signum();
+    for (entity, mut transform, mut state, moving_to) in query {
+        let target_coord = board.get_cell_coord(moving_to);
+        let direction = (target_coord - transform.translation.xy()).signum();
 
-		let diff = TILE_VELOCITY * time.delta_secs();
+        let diff = TILE_VELOCITY * time.delta_secs();
         transform.translation += direction.extend(0.) * diff;
         if target_coord.abs_diff_eq(transform.translation.xy(), diff) {
+            transform.translation.x = target_coord.x;
             transform.translation.y = target_coord.y;
             *state = TileState::Idle;
             commands.entity(entity).remove::<MovingTo>();
@@ -404,13 +488,13 @@ fn run_if_has_tiles_to_despawn(tiles_to_despawn: Res<TilesToDespawn>) -> bool {
 
 #[derive(Resource, Default)]
 struct Selection {
-    to_unselect: Vec<(usize, usize)>,
-    last_selected: Option<(usize, usize)>,
-    selected: Option<(usize, usize)>,
+    to_unselect: Vec<BoardIndex>,
+    last_selected: Option<BoardIndex>,
+    selected: Option<BoardIndex>,
 }
 
 #[derive(Resource, Default)]
-struct TilesToDespawn(Vec<(usize, usize)>);
+struct TilesToDespawn(Vec<BoardIndex>);
 
 #[derive(Component)]
 struct SelectArea;
@@ -431,10 +515,83 @@ struct TileBundle {
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
-struct MovingTo(usize, usize);
+struct MovingTo(BoardIndex);
+
+impl From<BoardIndex> for MovingTo {
+    fn from(idx: BoardIndex) -> Self {
+        Self(idx)
+    }
+}
 
 impl From<(usize, usize)> for MovingTo {
-    fn from((i, j): (usize, usize)) -> Self {
-        Self(i, j)
+    fn from(idx: (usize, usize)) -> Self {
+        Self(idx.into())
+    }
+}
+
+impl<'a> Into<BoardIndex> for &'a MovingTo {
+    fn into(self) -> BoardIndex {
+        self.0
+    }
+}
+
+#[derive(Resource)]
+struct Game {
+    rectangle_mesh: Handle<Mesh>,
+    select_area_material: Handle<ColorMaterial>,
+    circle_mesh: Handle<Mesh>,
+    circle_material: Handle<ColorMaterial>,
+    square_mesh: Handle<Mesh>,
+    square_material: Handle<ColorMaterial>,
+    triangle_mesh: Handle<Mesh>,
+    triangle_material: Handle<ColorMaterial>,
+}
+
+impl FromWorld for Game {
+    fn from_world(world: &mut World) -> Self {
+        let rectangle_mesh;
+        let select_area_material;
+        let circle_mesh;
+        let circle_material;
+        let square_mesh;
+        let square_material;
+        let triangle_mesh;
+        let triangle_material;
+
+        {
+            let mut meshes = world.get_resource_mut::<Assets<Mesh>>().unwrap();
+
+            rectangle_mesh = meshes.add(Rectangle::default());
+            circle_mesh = meshes.add(Circle::new(0.4));
+            square_mesh = meshes.add(Rectangle::from_size(Vec2::splat(0.8)));
+            triangle_mesh = meshes.add(Triangle2d::new(
+                Vec2::new(0., 0.4),
+                Vec2::new(-0.4, -0.4),
+                Vec2::new(0.4, -0.4),
+            ));
+        }
+
+        {
+            let mut materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
+
+			// @FIXME Вернуть альфа канал 0.75
+    		// С параметром альфа канала выглядит как будто область выделения находится над фигурой.
+            select_area_material =
+                materials.add(Color::srgba(184. / 255., 134. / 255., 11. / 255., 1.));
+            circle_material = materials.add(Color::srgb(175. / 255., 43. / 255., 30. / 255.));
+            square_material = materials.add(Color::srgb(71. / 255., 132. / 255., 48. / 255.));
+            triangle_material = materials.add(Color::srgb(27. / 255., 85. / 255., 131. / 255.));
+        }
+
+        Self {
+            rectangle_mesh,
+            select_area_material,
+            circle_mesh,
+            circle_material,
+            square_mesh,
+            square_material,
+            triangle_mesh,
+            triangle_material,
+        }
     }
 }

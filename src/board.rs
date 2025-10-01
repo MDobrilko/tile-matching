@@ -7,7 +7,8 @@ use rand::{
 };
 
 const BOARD_WIDTH: usize = 10;
-const BOARD_HEIGHT: usize = 10;
+const BOARD_VISIBLE_HEIGHT: usize = 10;
+const BOARD_HEIGHT: usize = BOARD_VISIBLE_HEIGHT * 2;
 const BOARD_TILE_SIZE: f32 = 75.0;
 const CELL_BORDER_WIDTH: f32 = 2.0;
 
@@ -29,6 +30,10 @@ impl Board {
         BOARD_HEIGHT
     }
 
+    pub fn visible_height(&self) -> usize {
+        BOARD_VISIBLE_HEIGHT
+    }
+
     pub fn cell_size(&self) -> f32 {
         self.tile_size() + CELL_BORDER_WIDTH
     }
@@ -44,17 +49,24 @@ impl Board {
     pub fn bottom_left(&self) -> Vec2 {
         Vec2::new(
             -(BOARD_WIDTH as f32 * (BOARD_TILE_SIZE + CELL_BORDER_WIDTH)) / 2.,
-            -(BOARD_HEIGHT as f32 * (BOARD_TILE_SIZE + CELL_BORDER_WIDTH)) / 2.,
+            -(BOARD_VISIBLE_HEIGHT as f32 * (BOARD_TILE_SIZE + CELL_BORDER_WIDTH)) / 2.,
         )
     }
 
-    pub fn ceil_right(&self) -> Vec2 {
+    pub fn top_right(&self) -> Vec2 {
         self.bottom_left()
-            + Vec2::new((BOARD_HEIGHT - 1) as f32, (BOARD_WIDTH - 1) as f32) * self.cell_size()
+            + Vec2::new((BOARD_VISIBLE_HEIGHT - 1) as f32, (BOARD_WIDTH - 1) as f32)
+                * self.cell_size()
     }
 
-    pub fn get_cell_coord(&self, i: usize, j: usize) -> Vec2 {
-        self.bottom_left() + Vec2::new(j as f32 * self.cell_size(), i as f32 * self.cell_size())
+    pub fn get_cell_coord(&self, idx: impl Into<BoardIndex>) -> Vec2 {
+        let idx = idx.into();
+
+        self.bottom_left()
+            + Vec2::new(
+                idx.1 as f32 * self.cell_size(),
+                idx.0 as f32 * self.cell_size(),
+            )
     }
 
     pub fn push_row(&mut self, row: Vec<Cell>) {
@@ -67,7 +79,7 @@ impl Board {
         self.0.push(row);
     }
 
-    pub fn get(&self, idx: usize) -> Option<&Vec<Cell>> {
+    pub fn get_row(&self, idx: usize) -> Option<&Vec<Cell>> {
         self.0.get(idx)
     }
 }
@@ -98,6 +110,39 @@ impl Index<usize> for Board {
 impl IndexMut<usize> for Board {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.0[index]
+    }
+}
+
+impl Index<BoardIndex> for Board {
+    type Output = Cell;
+
+    fn index(&self, BoardIndex(row_id, col_id): BoardIndex) -> &Self::Output {
+        &self.0[row_id][col_id]
+    }
+}
+
+impl IndexMut<BoardIndex> for Board {
+    fn index_mut(&mut self, BoardIndex(row_id, col_id): BoardIndex) -> &mut Self::Output {
+        &mut self.0[row_id][col_id]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BoardIndex(usize, usize);
+
+impl BoardIndex {
+    pub fn row_id(&self) -> usize {
+        self.0
+    }
+
+    pub fn col_id(&self) -> usize {
+        self.1
+    }
+}
+
+impl From<(usize, usize)> for BoardIndex {
+    fn from((row_id, col_id): (usize, usize)) -> Self {
+        Self(row_id, col_id)
     }
 }
 
