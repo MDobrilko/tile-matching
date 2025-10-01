@@ -60,6 +60,10 @@ impl Board {
 
         self.0.push(row);
     }
+
+    pub fn get(&self, idx: usize) -> Option<&Vec<Cell>> {
+        self.0.get(idx)
+    }
 }
 
 impl<'a> IntoIterator for &'a Board {
@@ -93,8 +97,6 @@ impl IndexMut<usize> for Board {
 
 #[derive(Clone, Copy)]
 pub struct Cell {
-    pub form: Form,
-    pub entity: Entity,
     pub tile: Option<Tile>,
 }
 
@@ -117,6 +119,7 @@ pub enum Form {
 
 #[derive(Clone, Copy)]
 pub struct Tile {
+    pub form: Form,
     pub entity: Entity,
     pub select_area_entity: Entity,
 }
