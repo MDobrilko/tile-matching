@@ -2,7 +2,7 @@ use bevy::{math::prelude::*, prelude::*};
 
 mod board;
 
-use board::{Board, Cell, Form, Tile};
+use board::{Board, Cell, Form, Tile, TILE_VELOCITY};
 
 fn main() -> AppExit {
     App::new()
@@ -13,41 +13,32 @@ fn main() -> AppExit {
             }),
             ..Default::default()
         }))
-        .init_resource::<Game>()
-        // .init_state::<GameState>()
+        .init_resource::<Board>()
+        .init_resource::<Selection>()
+        .init_resource::<TilesToDespawn>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 handle_click,
-                draw_selected,
+                handle_selection,
                 (
+					move_tiles,
                     check_board,
                     despawn_tiles.run_if(run_if_has_tiles_to_despawn),
-                    gravity,
                 )
                     .chain(),
             ),
         )
-        // .add_systems(Update, handle_right_click)
         .run()
 }
 
-// #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, States, Hash)]
-// enum GameState {
-//     #[default]
-//     Playing,
-//     GameOver,
-// }
-
 fn setup(
     mut commands: Commands,
-    mut game: ResMut<Game>,
+    mut board: ResMut<Board>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let mut board = Board::new();
-
     commands.spawn((Camera2d, Transform::default()));
 
     let cell_mesh = meshes.add(Rectangle::default());
@@ -93,14 +84,15 @@ fn setup(
                 .id();
 
             let tile_entity = commands
-                .spawn((
-                    Transform::from_xyz(x, y, 0.5).with_scale(Vec3::new(
+                .spawn(TileBundle {
+                    transform: Transform::from_xyz(x, y, 0.5).with_scale(Vec3::new(
                         board.cell_size() - board.border_width(),
                         board.cell_size() - board.border_width(),
                         0.,
                     )),
-                    Visibility::Inherited,
-                ))
+                    visibility: Visibility::Inherited,
+                    state: TileState::Idle,
+                })
                 .add_child(select_area_entity)
                 .with_child((
                     Mesh2d(form_mesh),
@@ -129,38 +121,58 @@ fn setup(
         }
         board.push_row(row);
     }
-
-    // let white_color = materials.add(Color::srgb(1., 1., 1.));
-    // commands.spawn((
-    //     Mesh2d(circle_mesh.clone()),
-    //     MeshMaterial2d(white_color.clone()),
-    //     Transform::from_translation(Board::ceil_right().extend(10.)).with_scale(Vec3::splat(40.)),
-    // ));
-    // commands.spawn((
-    //     Mesh2d(circle_mesh.clone()),
-    //     MeshMaterial2d(white_color.clone()),
-    //     Transform::from_translation(Board::bottom_left().extend(10.)).with_scale(Vec3::splat(40.)),
-    // ));
-    // commands.spawn((
-    //     Mesh2d(circle_mesh.clone()),
-    //     MeshMaterial2d(white_color.clone()),
-    //     Transform::from_xyz(0., 0., 10.).with_scale(Vec3::splat(40.)),
-    // ));
-
-    game.board = board;
 }
 
-fn draw_selected(mut game: ResMut<Game>, mut commands: Commands) {
-    while let Some((i, j)) = game.prev_selected.pop() {
-        set_selected(&mut commands, &mut game.board[i][j], false);
+fn handle_selection(
+    mut board: ResMut<Board>,
+    mut selection: ResMut<Selection>,
+    mut commands: Commands,
+) {
+    while let Some((i, j)) = selection.to_unselect.pop() {
+        set_selected(&mut commands, &board[i][j], false);
     }
 
-    if let Some(cell) = game.selected.map(|(i, j)| &mut game.board[i][j]) {
+    if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected) {
+        let di = (last_selected.0 as isize - selected.0 as isize).abs();
+        let dj = (last_selected.1 as isize - selected.1 as isize).abs();
+
+        if di + dj == 1
+            && let Some((last_selected_tile, selected_tile)) = board[last_selected.0][last_selected.1]
+                .tile
+                .as_ref()
+                .zip(board[selected.0][selected.1].tile.as_ref())
+        {
+			set_selected(&mut commands, &board[selected.0][selected.1], false);
+			selection.last_selected = None;
+			selection.selected = None;
+
+            commands
+                .entity(last_selected_tile.entity)
+                .entry::<TileState>()
+                .and_modify(|mut state| *state = TileState::Moving);
+
+            commands
+                .entity(last_selected_tile.entity)
+                .insert(MovingTo::from(selected));
+
+            commands
+                .entity(selected_tile.entity)
+                .entry::<TileState>()
+                .and_modify(|mut state| *state = TileState::Moving);
+            commands
+                .entity(selected_tile.entity)
+                .insert(MovingTo::from(last_selected));
+
+			let tmp = board[last_selected.0][last_selected.1].tile;
+			board[last_selected.0][last_selected.1].tile = board[selected.0][selected.1].tile;
+			board[selected.0][selected.1].tile = tmp;
+        }
+    } else if let Some(cell) = selection.selected.map(|(i, j)| &board[i][j]) {
         set_selected(&mut commands, cell, true);
     }
 }
 
-fn set_selected(commands: &mut Commands, cell: &mut Cell, selected: bool) {
+fn set_selected(commands: &mut Commands, cell: &Cell, selected: bool) {
     let (new_visibility, new_scale) = if selected {
         (
             Visibility::Inherited,
@@ -173,12 +185,7 @@ fn set_selected(commands: &mut Commands, cell: &mut Cell, selected: bool) {
         )
     };
 
-    // commands
-    //     .entity(cell.entity)
-    //     .entry::<Transform>()
-    //     .and_modify(move |mut transform| transform.scale = new_scale);
-
-    if let Some(tile) = cell.tile {
+    if let Some(tile) = cell.tile.as_ref() {
         commands
             .entity(tile.entity)
             .entry::<Transform>()
@@ -194,8 +201,10 @@ fn set_selected(commands: &mut Commands, cell: &mut Cell, selected: bool) {
 fn handle_click(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Single<&Window>,
-    mut game: ResMut<Game>,
+    board: Res<Board>,
+    mut selection: ResMut<Selection>,
     camera_query: Single<(&Camera, &GlobalTransform)>,
+    tile_query: Query<&TileState>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
@@ -216,8 +225,8 @@ fn handle_click(
         mouse_world_pos.x, mouse_world_pos.y
     );
 
-    let bottom_left_border_pos = game.board.bottom_left() - game.board.cell_size() / 2.;
-    let upper_right_border_pos = game.board.ceil_right() + game.board.cell_size() / 2.;
+    let bottom_left_border_pos = board.bottom_left() - board.cell_size() / 2.;
+    let upper_right_border_pos = board.ceil_right() + board.cell_size() / 2.;
 
     // println!("Bottom left border: {bottom_left_border_pos}");
     // println!("Upper right border: {upper_right_border_pos}");
@@ -230,8 +239,7 @@ fn handle_click(
         return;
     }
 
-    let clicked_cell_pos =
-        ((mouse_world_pos - bottom_left_border_pos) / game.board.cell_size()).floor();
+    let clicked_cell_pos = ((mouse_world_pos - bottom_left_border_pos) / board.cell_size()).floor();
 
     // println!("Clicked sell pos: {clicked_cell_pos}");
 
@@ -240,105 +248,110 @@ fn handle_click(
 
     println!("Defined cell: {}, {}", i, j);
 
-    let selected = game.selected;
+    let selected = selection.selected;
 
-    game.prev_selected.extend(selected);
+    selection.to_unselect.extend(selected);
+    selection.last_selected = selected;
 
-    if Some((i, j)) == selected {
-        game.selected = None;
-    } else if game.board[i][j].tile.is_none() {
-		game.selected = None;
-	} else {
-        game.selected = Some((i, j));
+    if Some((i, j)) == selected
+        || board[i][j].tile.as_ref().is_none_or(|tile| {
+            tile_query
+                .get(tile.entity)
+                .is_ok_and(|state| *state != TileState::Idle)
+        })
+    {
+        selection.selected = None;
+    } else {
+        selection.selected = Some((i, j));
     }
 }
 
-// fn handle_right_click(world: &mut World) {
-// 	let buttons = world.get_resource::<ButtonInput<MouseButton>>().unwrap();
-// 	if !buttons.pressed(MouseButton::Right) {
-// 		return;
-// 	}
+fn check_board(
+    board: Res<Board>,
+    mut tiles_to_despawn: ResMut<TilesToDespawn>,
+    tile_query: Query<&TileState>,
+) {
+    let n = board.width().max(board.height());
 
-// 	let system_id = world.register_system(gravity);
-
-// 	world.run_system(system_id).unwrap();
-// }
-
-fn check_board(mut game: ResMut<Game>) {
-    let tiles_to_despawn = {
-        let board = &game.board;
-
+    for i in 0..n {
         let mut form_by_row = Form::Square;
         let mut form_by_column = Form::Square;
         let mut matched_by_row = vec![];
         let mut matched_by_column = vec![];
 
-        let mut tiles_to_despawn = Vec::new();
-
-        let n = board.width().max(board.height());
-        for i in 0..n {
-            for j in 0..n {
-                if let Some(cur_form) = board
-                    .get(i)
-                    .and_then(|row| row.get(j))
-                    .and_then(|cell| cell.tile.as_ref())
-                    .map(|tile| tile.form)
+        for j in 0..n {
+            if let Some(tile) = board
+                .get(i)
+                .and_then(|row| row.get(j))
+                .and_then(|cell| cell.tile.as_ref())
+            {
+                if tile_query
+                    .get(tile.entity)
+                    .is_ok_and(|state| *state != TileState::Idle)
                 {
-                    if form_by_row != cur_form {
-                        if matched_by_row.len() >= 3 {
-                            tiles_to_despawn.append(&mut matched_by_row);
-                        } else {
-                            matched_by_row.clear();
-                        }
-                        form_by_row = cur_form
-                    }
-
-                    matched_by_row.push((i, j));
+                    break;
                 }
 
-                if let Some(cur_form) = board
-                    .get(j)
-                    .and_then(|row| row.get(i))
-                    .and_then(|cell| cell.tile.as_ref())
-                    .map(|tile| tile.form)
-                {
-                    if form_by_column != cur_form {
-                        if matched_by_column.len() >= 3 {
-                            tiles_to_despawn.append(&mut matched_by_column);
-                        } else {
-                            matched_by_column.clear();
-                        }
-                        form_by_column = cur_form;
+                if form_by_row != tile.form {
+                    if matched_by_row.len() >= 3 {
+                        tiles_to_despawn.0.append(&mut matched_by_row);
+                    } else {
+                        matched_by_row.clear();
                     }
-
-                    matched_by_column.push((j, i));
+                    form_by_row = tile.form;
                 }
+
+                matched_by_row.push((i, j));
+            }
+
+            if let Some(tile) = board
+                .get(j)
+                .and_then(|row| row.get(i))
+                .and_then(|cell| cell.tile.as_ref())
+            {
+                if tile_query
+                    .get(tile.entity)
+                    .is_ok_and(|state| *state != TileState::Idle)
+                {
+                    break;
+                }
+
+                if form_by_column != tile.form {
+                    if matched_by_column.len() >= 3 {
+                        tiles_to_despawn.0.append(&mut matched_by_column);
+                    } else {
+                        matched_by_column.clear();
+                    }
+                    form_by_column = tile.form;
+                }
+
+                matched_by_column.push((j, i));
             }
         }
 
         if matched_by_row.len() >= 3 {
-            tiles_to_despawn.append(&mut matched_by_row);
+            tiles_to_despawn.0.append(&mut matched_by_row);
         }
         if matched_by_column.len() >= 3 {
-            tiles_to_despawn.append(&mut matched_by_column);
+            tiles_to_despawn.0.append(&mut matched_by_column);
         }
-
-        tiles_to_despawn
-    };
-
-    game.tiles_to_despawn.extend(tiles_to_despawn);
+    }
 }
 
-fn despawn_tiles(mut game: ResMut<Game>, mut commands: Commands) {
-    while let Some((i, j)) = game.tiles_to_despawn.pop() {
-        if let Some(tile) = game.board[i][j].tile.take() {
+fn despawn_tiles(
+    mut board: ResMut<Board>,
+    mut tiles_to_despawn: ResMut<TilesToDespawn>,
+    mut commands: Commands,
+) {
+    while let Some((i, j)) = tiles_to_despawn.0.pop() {
+        if let Some(tile) = board[i][j].tile.take() {
             commands.entity(tile.entity).despawn();
         }
     }
 
-    for col_id in 0..game.board.width() {
-        let last_empty = (0..game.board.height()).find_map(|i| {
-            if game.board[i][col_id].tile.is_none() {
+    for col_id in 0..board.width() {
+        let last_empty = (0..board.height()).find_map(|i| {
+            if board[i][col_id].tile.is_none() {
                 Some(i)
             } else {
                 None
@@ -346,11 +359,18 @@ fn despawn_tiles(mut game: ResMut<Game>, mut commands: Commands) {
         });
 
         if let Some(mut last_empty) = last_empty {
-            for row_id in last_empty..game.board.height() {
-                if let Some(tile) = game.board[row_id][col_id].tile.as_ref() {
+            for row_id in last_empty..board.height() {
+                if let Some(tile) = board[row_id][col_id].tile.take() {
                     commands
                         .entity(tile.entity)
-                        .insert(Falling(last_empty, col_id));
+                        .entry::<TileState>()
+                        .and_modify(|mut state| *state = TileState::Moving);
+
+                    commands
+                        .entity(tile.entity)
+                        .insert(MovingTo(last_empty, col_id));
+
+                    board[last_empty][col_id].tile = Some(tile);
                     last_empty += 1;
                 }
             }
@@ -358,32 +378,63 @@ fn despawn_tiles(mut game: ResMut<Game>, mut commands: Commands) {
     }
 }
 
-fn gravity(time: Res<Time>, game: Res<Game>, query: Query<(&mut Transform, &Falling)>) {
-    for (mut transform, Falling(target_i, target_j)) in query {
-		let target_coord = game.board.get_cell_coord(*target_i, *target_j);
+fn move_tiles(
+    time: Res<Time>,
+    mut commands: Commands,
+    board: Res<Board>,
+    query: Query<(Entity, &mut Transform, &mut TileState, &MovingTo)>,
+) {
+    for (entity, mut transform, mut state, moving) in query {
+        let target_coord = board.get_cell_coord(moving.0, moving.1);
+		let direction = (target_coord - transform.translation.xy()).signum();
 
-		transform.translation.y -= 75. * time.delta_secs();
-		if transform.translation.y <= target_coord.y {
-			transform.translation.y = target_coord.y;
-		}
-	}
+		let diff = TILE_VELOCITY * time.delta_secs();
+        transform.translation += direction.extend(0.) * diff;
+        if target_coord.abs_diff_eq(transform.translation.xy(), diff) {
+            transform.translation.y = target_coord.y;
+            *state = TileState::Idle;
+            commands.entity(entity).remove::<MovingTo>();
+        }
+    }
 }
 
-fn run_if_has_tiles_to_despawn(game: Res<Game>) -> bool {
-    !game.tiles_to_despawn.is_empty()
+fn run_if_has_tiles_to_despawn(tiles_to_despawn: Res<TilesToDespawn>) -> bool {
+    !tiles_to_despawn.0.is_empty()
 }
 
 #[derive(Resource, Default)]
-struct Game {
-    board: Board,
-    prev_selected: Vec<(usize, usize)>,
+struct Selection {
+    to_unselect: Vec<(usize, usize)>,
+    last_selected: Option<(usize, usize)>,
     selected: Option<(usize, usize)>,
-    tiles_to_despawn: Vec<(usize, usize)>,
 }
+
+#[derive(Resource, Default)]
+struct TilesToDespawn(Vec<(usize, usize)>);
 
 #[derive(Component)]
 struct SelectArea;
 
+#[derive(Component, Default, Eq, PartialEq)]
+enum TileState {
+    #[default]
+    Idle,
+    Moving,
+}
+
+#[derive(Bundle)]
+struct TileBundle {
+    transform: Transform,
+    visibility: Visibility,
+    state: TileState,
+}
+
 #[derive(Component)]
 #[component(storage = "SparseSet")]
-struct Falling(usize, usize);
+struct MovingTo(usize, usize);
+
+impl From<(usize, usize)> for MovingTo {
+    fn from((i, j): (usize, usize)) -> Self {
+        Self(i, j)
+    }
+}

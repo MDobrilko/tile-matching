@@ -1,6 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use bevy::prelude::{Entity, Vec2};
+use bevy::prelude::{Entity, Resource, Vec2};
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
@@ -11,6 +11,9 @@ const BOARD_HEIGHT: usize = 10;
 const BOARD_TILE_SIZE: f32 = 75.0;
 const CELL_BORDER_WIDTH: f32 = 2.0;
 
+pub const TILE_VELOCITY: f32 = 100.;
+
+#[derive(Resource)]
 pub struct Board(Vec<Vec<Cell>>);
 
 impl Board {
@@ -47,8 +50,7 @@ impl Board {
 
     pub fn ceil_right(&self) -> Vec2 {
         self.bottom_left()
-            + Vec2::new((BOARD_HEIGHT - 1) as f32, (BOARD_WIDTH - 1) as f32)
-                * self.cell_size()
+            + Vec2::new((BOARD_HEIGHT - 1) as f32, (BOARD_WIDTH - 1) as f32) * self.cell_size()
     }
 
     pub fn get_cell_coord(&self, i: usize, j: usize) -> Vec2 {
@@ -114,18 +116,18 @@ impl Cell {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub enum Form {
-    Circle,
-    Square,
-    Triangle,
-}
-
 #[derive(Clone, Copy)]
 pub struct Tile {
     pub form: Form,
     pub entity: Entity,
     pub select_area_entity: Entity,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Form {
+    Circle,
+    Square,
+    Triangle,
 }
 
 impl Distribution<Form> for StandardUniform {
