@@ -358,11 +358,11 @@ fn despawn_tiles(mut game: ResMut<Game>, mut commands: Commands) {
     }
 }
 
-fn gravity(game: Res<Game>, query: Query<(&mut Transform, &Falling)>) {
+fn gravity(time: Res<Time>, game: Res<Game>, query: Query<(&mut Transform, &Falling)>) {
     for (mut transform, Falling(target_i, target_j)) in query {
 		let target_coord = game.board.get_cell_coord(*target_i, *target_j);
 
-		transform.translation.y -= 5.;
+		transform.translation.y -= 75. * time.delta_secs();
 		if transform.translation.y <= target_coord.y {
 			transform.translation.y = target_coord.y;
 		}
