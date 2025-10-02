@@ -173,14 +173,18 @@ pub enum Form {
     Circle,
     Square,
     Triangle,
+    Rhombus,
+    Annulus,
 }
 
 impl Distribution<Form> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Form {
-        match rng.random_range(0..=2) {
+        match rng.random_range(0..5) {
             0 => Form::Circle,
             1 => Form::Square,
-            _ => Form::Triangle,
+            2 => Form::Triangle,
+            3 => Form::Rhombus,
+            _ => Form::Annulus,
         }
     }
 }

@@ -17,7 +17,7 @@ fn main() -> AppExit {
         .init_resource::<Selection>()
         .init_resource::<TilesToDespawn>()
         .init_resource::<Game>()
-		.init_resource::<ScoreStorage>()
+        .init_resource::<ScoreStorage>()
         .add_systems(Startup, (setup, setup_score))
         .add_systems(
             Update,
@@ -25,7 +25,7 @@ fn main() -> AppExit {
                 handle_click,
                 handle_selection,
                 move_camera,
-				display_score,
+                display_score,
                 (
                     move_tiles,
                     check_board_for_matching,
@@ -60,21 +60,21 @@ fn move_camera(
 }
 
 fn setup_score(mut commands: Commands) {
-	commands.spawn((
-		Text::new("Score:"),
-		TextFont  {
-			font_size: 25.,
-			..Default::default()
-		},
-		TextColor(Color::srgb(0.5, 0.5, 1.0)),
+    commands.spawn((
+        Text::new("Score:"),
+        TextFont {
+            font_size: 25.,
+            ..Default::default()
+        },
+        TextColor(Color::srgb(0.5, 0.5, 1.0)),
         Node {
             position_type: PositionType::Absolute,
             top: px(5),
             left: px(5),
             ..Default::default()
         },
-		ScoreDisplay,
-	));	
+        ScoreDisplay,
+    ));
 }
 
 #[derive(Component)]
@@ -84,7 +84,7 @@ struct ScoreDisplay;
 struct ScoreStorage(usize);
 
 fn display_score(score: Res<ScoreStorage>, mut display: Single<&mut Text, With<ScoreDisplay>>) {
-	display.0 = format!("Score: {}", score.0);
+    display.0 = format!("Score: {}", score.0);
 }
 
 fn setup(
@@ -132,6 +132,8 @@ fn setup(
                 Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
                 Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
                 Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
+                Form::Rhombus => (game.rhombus_mesh.clone(), game.rhombus_material.clone()),
+                Form::Annulus => (game.annulus_mesh.clone(), game.annulus_material.clone()),
             };
 
             let Vec2 { x, y } = board.get_cell_coord((i, j));
@@ -190,12 +192,25 @@ fn handle_selection(
     mut board: ResMut<Board>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
+    tile_query: Query<&TileState>,
 ) {
     while let Some(idx) = selection.to_unselect.pop() {
         set_selected(&mut commands, &board[idx], false);
     }
 
-    if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected) {
+    if selection
+        .selected
+        .and_then(|idx| board[idx].tile.as_ref())
+        .is_none_or(|tile| {
+            tile_query
+                .get(tile.entity)
+                .ok()
+                .is_none_or(|state| *state != TileState::Idle)
+        })
+    {
+        selection.selected = None;
+    } else if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected)
+    {
         let di = (last_selected.row_id() as isize - selected.row_id() as isize).abs();
         let dj = (last_selected.col_id() as isize - selected.col_id() as isize).abs();
 
@@ -214,27 +229,26 @@ fn handle_selection(
                 .entry::<TileState>()
                 .and_modify(|mut state| *state = TileState::Moving);
 
-            commands
-                .entity(last_selected_tile.entity)
-                .insert(Moving {
-					from: last_selected,
-					to: selected,
-				});
+            commands.entity(last_selected_tile.entity).insert(Moving {
+                from: last_selected,
+                to: selected,
+            });
 
             commands
                 .entity(selected_tile.entity)
                 .entry::<TileState>()
                 .and_modify(|mut state| *state = TileState::Moving);
-            commands
-                .entity(selected_tile.entity)
-                .insert(Moving {
-					from: selected,
-					to: last_selected,
-				});
+            commands.entity(selected_tile.entity).insert(Moving {
+                from: selected,
+                to: last_selected,
+            });
 
             let tmp = board[last_selected].tile;
             board[last_selected].tile = board[selected].tile;
             board[selected].tile = tmp;
+        } else {
+            set_selected(&mut commands, &board[last_selected], false);
+            set_selected(&mut commands, &board[selected], true);
         }
     } else if let Some(cell) = selection.selected.map(|idx| &board[idx]) {
         set_selected(&mut commands, cell, true);
@@ -273,7 +287,6 @@ fn handle_click(
     board: Res<Board>,
     mut selection: ResMut<Selection>,
     camera_query: Single<(&Camera, &GlobalTransform)>,
-    tile_query: Query<&TileState>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
@@ -317,26 +330,15 @@ fn handle_click(
 
     println!("Defined cell: {}, {}", i, j);
 
-    let selected = selection.selected;
+    let last_selected = selection.selected;
 
-    selection.to_unselect.extend(selected);
-    selection.last_selected = selected;
-
-    if Some((i, j).into()) == selected
-        || board[i][j].tile.as_ref().is_none_or(|tile| {
-            tile_query
-                .get(tile.entity)
-                .is_ok_and(|state| *state != TileState::Idle)
-        })
-    {
-        selection.selected = None;
-    } else {
-        selection.selected = Some((i, j).into());
-    }
+    selection.to_unselect.extend(last_selected);
+    selection.last_selected = last_selected;
+    selection.selected = Some((i, j).into());
 }
 
 fn check_board_for_matching(
-	mut score: ResMut<ScoreStorage>,
+    mut score: ResMut<ScoreStorage>,
     board: Res<Board>,
     mut tiles_to_despawn: ResMut<TilesToDespawn>,
     tile_query: Query<&TileState>,
@@ -364,7 +366,7 @@ fn check_board_for_matching(
 
                 if form_by_row != tile.form {
                     if matched_by_row.len() >= 3 {
-						score.0 += 10 * matched_by_row.len();
+                        score.0 += 10 * matched_by_row.len();
                         tiles_to_despawn.0.append(&mut matched_by_row);
                     } else {
                         matched_by_row.clear();
@@ -389,7 +391,7 @@ fn check_board_for_matching(
 
                 if form_by_column != tile.form {
                     if matched_by_column.len() >= 3 {
-						score.0 += 10 * matched_by_column.len();
+                        score.0 += 10 * matched_by_column.len();
                         tiles_to_despawn.0.append(&mut matched_by_column);
                     } else {
                         matched_by_column.clear();
@@ -402,11 +404,11 @@ fn check_board_for_matching(
         }
 
         if matched_by_row.len() >= 3 {
-			score.0 += 10 * matched_by_row.len();
+            score.0 += 10 * matched_by_row.len();
             tiles_to_despawn.0.append(&mut matched_by_row);
         }
         if matched_by_column.len() >= 3 {
-			score.0 += 10 * matched_by_column.len();
+            score.0 += 10 * matched_by_column.len();
             tiles_to_despawn.0.append(&mut matched_by_column);
         }
     }
@@ -440,12 +442,10 @@ fn despawn_tiles(
                         .entry::<TileState>()
                         .and_modify(|mut state| *state = TileState::Moving);
 
-                    commands
-                        .entity(tile.entity)
-                        .insert(Moving {
-							from: (row_id, col_id).into(),
-							to: (last_empty, col_id).into(),
-						});
+                    commands.entity(tile.entity).insert(Moving {
+                        from: (row_id, col_id).into(),
+                        to: (last_empty, col_id).into(),
+                    });
 
                     board[last_empty][col_id].tile = Some(tile);
                     last_empty += 1;
@@ -463,6 +463,8 @@ fn spawn_tiles(mut board: ResMut<Board>, mut commands: Commands, game: Res<Game>
                 Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
                 Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
                 Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
+                Form::Rhombus => (game.rhombus_mesh.clone(), game.rhombus_material.clone()),
+                Form::Annulus => (game.annulus_mesh.clone(), game.annulus_material.clone()),
             };
             let Vec2 { x, y } = board.get_cell_coord((row_id, col_id));
 
@@ -514,9 +516,9 @@ fn move_tiles(
     for (entity, mut transform, mut state, moving) in query {
         let target_coord = board.get_cell_coord(moving.to);
 
-		let dx = (moving.to.col_id() as isize - moving.from.col_id() as isize).signum() as f32;
-		let dy = (moving.to.row_id() as isize - moving.from.row_id() as isize).signum() as f32;
-		let direction = Vec2::new(dx, dy);
+        let dx = (moving.to.col_id() as isize - moving.from.col_id() as isize).signum() as f32;
+        let dy = (moving.to.row_id() as isize - moving.from.row_id() as isize).signum() as f32;
+        let direction = Vec2::new(dx, dy);
 
         let delta = TILE_VELOCITY * time.delta_secs();
         transform.translation += direction.extend(0.) * delta;
@@ -563,8 +565,8 @@ struct TileBundle {
 #[derive(Component)]
 #[component(storage = "SparseSet")]
 struct Moving {
-	from: BoardIndex,
-	to: BoardIndex,
+    from: BoardIndex,
+    to: BoardIndex,
 }
 
 #[derive(Resource)]
@@ -577,6 +579,10 @@ struct Game {
     square_material: Handle<ColorMaterial>,
     triangle_mesh: Handle<Mesh>,
     triangle_material: Handle<ColorMaterial>,
+    rhombus_mesh: Handle<Mesh>,
+    rhombus_material: Handle<ColorMaterial>,
+    annulus_mesh: Handle<Mesh>,
+    annulus_material: Handle<ColorMaterial>,
 }
 
 impl FromWorld for Game {
@@ -589,6 +595,10 @@ impl FromWorld for Game {
         let square_material;
         let triangle_mesh;
         let triangle_material;
+        let rhombus_mesh;
+        let rhombus_material;
+        let annulus_mesh;
+        let annulus_material;
 
         {
             let mut meshes = world.get_resource_mut::<Assets<Mesh>>().unwrap();
@@ -601,18 +611,22 @@ impl FromWorld for Game {
                 Vec2::new(-0.4, -0.4),
                 Vec2::new(0.4, -0.4),
             ));
+            rhombus_mesh = meshes.add(Rhombus::new(0.8, 0.8));
+            annulus_mesh = meshes.add(Annulus::new(0.3, 0.4));
         }
 
         {
             let mut materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
 
-			// @FIXME Вернуть альфа канал 0.75
-    		// С параметром альфа канала выглядит как будто область выделения находится над фигурой.
+            // @FIXME Вернуть альфа канал 0.75
+            // С параметром альфа канала выглядит как будто область выделения находится над фигурой.
             select_area_material =
-                materials.add(Color::srgba(184. / 255., 134. / 255., 11. / 255., 1.));
+                materials.add(Color::srgba(165. / 255., 187. / 255., 192. / 255., 1.));
             circle_material = materials.add(Color::srgb(175. / 255., 43. / 255., 30. / 255.));
             square_material = materials.add(Color::srgb(71. / 255., 132. / 255., 48. / 255.));
             triangle_material = materials.add(Color::srgb(27. / 255., 85. / 255., 131. / 255.));
+            rhombus_material = materials.add(Color::srgb(229. / 255., 132. / 255., 38. / 255.));
+            annulus_material = materials.add(Color::srgb(217. / 255., 119. / 255., 169. / 255.));
         }
 
         Self {
@@ -624,6 +638,10 @@ impl FromWorld for Game {
             square_material,
             triangle_mesh,
             triangle_material,
+            rhombus_mesh,
+            rhombus_material,
+            annulus_mesh,
+            annulus_material,
         }
     }
 }
