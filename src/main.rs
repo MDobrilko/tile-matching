@@ -28,6 +28,7 @@ fn main() -> AppExit {
                 display_score,
                 (
                     move_tiles,
+                    check_swapped_for_matching,
                     check_board_for_matching,
                     despawn_tiles.run_if(run_if_has_tiles_to_despawn),
                     spawn_tiles,
@@ -215,37 +216,17 @@ fn handle_selection(
         let dj = (last_selected.col_id() as isize - selected.col_id() as isize).abs();
 
         if di + dj == 1
-            && let Some((last_selected_tile, selected_tile)) = board[last_selected]
-                .tile
-                .as_ref()
-                .zip(board[selected].tile.as_ref())
+            && board[last_selected].tile.is_some()
+            && let Some(selected_tile) = board[selected].tile
         {
             set_selected(&mut commands, &board[selected], false);
             selection.last_selected = None;
             selection.selected = None;
 
-            commands
-                .entity(last_selected_tile.entity)
-                .entry::<TileState>()
-                .and_modify(|mut state| *state = TileState::Moving);
-
-            commands.entity(last_selected_tile.entity).insert(Moving {
-                from: last_selected,
-                to: selected,
-            });
-
+            swap_tiles(&mut board, &mut commands, last_selected, selected);
             commands
                 .entity(selected_tile.entity)
-                .entry::<TileState>()
-                .and_modify(|mut state| *state = TileState::Moving);
-            commands.entity(selected_tile.entity).insert(Moving {
-                from: selected,
-                to: last_selected,
-            });
-
-            let tmp = board[last_selected].tile;
-            board[last_selected].tile = board[selected].tile;
-            board[selected].tile = tmp;
+                .insert(CheckMatchesOrSwap([last_selected, selected]));
         } else {
             set_selected(&mut commands, &board[last_selected], false);
             set_selected(&mut commands, &board[selected], true);
@@ -335,6 +316,100 @@ fn handle_click(
     selection.to_unselect.extend(last_selected);
     selection.last_selected = last_selected;
     selection.selected = Some((i, j).into());
+}
+
+fn check_swapped_for_matching(
+    mut commands: Commands,
+    mut board: ResMut<Board>,
+    swapped_tiles: Query<(Entity, &CheckMatchesOrSwap), Without<Moving>>,
+) {
+    for (entity, swapped) in swapped_tiles {
+        let mut has_matches = false;
+        'search_matches: for (idx, check_tile) in swapped
+            .0
+            .iter()
+            .filter_map(|idx| board[*idx].tile.as_ref().map(|tile| (*idx, tile)))
+        {
+            let match_range = |idx: usize, max_idx: usize| {
+                ((idx as isize - 2).max(0) as usize)..=((idx + 2).min(max_idx - 1))
+            };
+            let mut matched = 0;
+
+            for row_id in match_range(idx.row_id(), board.visible_height()) {
+                if board[row_id][idx.col_id()]
+                    .tile
+                    .as_ref()
+                    .is_some_and(|tile| tile.form == check_tile.form)
+                {
+                    matched += 1;
+                    has_matches = matched >= 3;
+
+                    if has_matches {
+                        break 'search_matches;
+                    }
+                } else {
+                    matched = 0;
+                }
+            }
+
+            for col_id in match_range(idx.col_id(), board.width()) {
+                if board[idx.row_id()][col_id]
+                    .tile
+                    .as_ref()
+                    .is_some_and(|tile| tile.form == check_tile.form)
+                {
+                    matched += 1;
+                    has_matches = matched >= 3;
+                    if has_matches {
+                        break 'search_matches;
+                    }
+                } else {
+                    matched = 0;
+                }
+            }
+        }
+
+        commands.entity(entity).remove::<CheckMatchesOrSwap>();
+
+        if !has_matches {
+            let from = swapped.0[0];
+            let to = swapped.0[1];
+
+            swap_tiles(&mut board, &mut commands, from, to);
+        }
+    }
+}
+
+fn swap_tiles(board: &mut Board, commands: &mut Commands, idx1: BoardIndex, idx2: BoardIndex) {
+    let Some(tile1) = board[idx1].tile.as_ref() else {
+        return;
+    };
+    let Some(tile2) = board[idx2].tile.as_ref() else {
+        return;
+    };
+
+    commands
+        .entity(tile1.entity)
+        .entry::<TileState>()
+        .and_modify(|mut state| *state = TileState::Moving);
+
+    commands
+        .entity(tile2.entity)
+        .entry::<TileState>()
+        .and_modify(|mut state| *state = TileState::Moving);
+
+    commands.entity(tile1.entity).insert(Moving {
+        from: idx1,
+        to: idx2,
+    });
+    commands.entity(tile2.entity).insert(Moving {
+        from: idx2,
+        to: idx1,
+    });
+
+    let tmp = board[idx1].tile;
+    board[idx1].tile = board[idx2].tile;
+    board[idx2].tile = tmp;
 }
 
 fn check_board_for_matching(
@@ -568,6 +643,10 @@ struct Moving {
     from: BoardIndex,
     to: BoardIndex,
 }
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct CheckMatchesOrSwap([BoardIndex; 2]);
 
 #[derive(Resource)]
 struct Game {
