@@ -24,7 +24,6 @@ fn main() -> AppExit {
             (
                 handle_click,
                 handle_selection,
-                move_camera,
                 display_score,
                 (
                     move_tiles,
@@ -37,27 +36,6 @@ fn main() -> AppExit {
             ),
         )
         .run()
-}
-
-fn move_camera(
-    time: Res<Time>,
-    buttons: Res<ButtonInput<KeyCode>>,
-    mut query: Single<&mut Transform, With<Camera>>,
-) {
-    let delta = 2. * TILE_VELOCITY * time.delta_secs();
-
-    if buttons.pressed(KeyCode::ArrowUp) {
-        query.translation.y += delta;
-    }
-    if buttons.pressed(KeyCode::ArrowDown) {
-        query.translation.y -= delta;
-    }
-    if buttons.pressed(KeyCode::ArrowLeft) {
-        query.translation.x -= delta;
-    }
-    if buttons.pressed(KeyCode::ArrowRight) {
-        query.translation.x += delta;
-    }
 }
 
 fn setup_score(mut commands: Commands) {
