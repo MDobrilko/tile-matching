@@ -12,7 +12,7 @@ const BOARD_HEIGHT: usize = BOARD_VISIBLE_HEIGHT * 2;
 const BOARD_TILE_SIZE: f32 = 75.0;
 const CELL_BORDER_WIDTH: f32 = 2.0;
 
-pub const TILE_VELOCITY: f32 = 100.;
+pub const TILE_VELOCITY: f32 = 200.;
 
 #[derive(Resource)]
 pub struct Board(Vec<Vec<Cell>>);

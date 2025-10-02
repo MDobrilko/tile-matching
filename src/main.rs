@@ -17,13 +17,15 @@ fn main() -> AppExit {
         .init_resource::<Selection>()
         .init_resource::<TilesToDespawn>()
         .init_resource::<Game>()
-        .add_systems(Startup, setup)
+		.init_resource::<ScoreStorage>()
+        .add_systems(Startup, (setup, setup_score))
         .add_systems(
             Update,
             (
                 handle_click,
                 handle_selection,
                 move_camera,
+				display_score,
                 (
                     move_tiles,
                     check_board_for_matching,
@@ -55,6 +57,34 @@ fn move_camera(
     if buttons.pressed(KeyCode::ArrowRight) {
         query.translation.x += delta;
     }
+}
+
+fn setup_score(mut commands: Commands) {
+	commands.spawn((
+		Text::new("Score:"),
+		TextFont  {
+			font_size: 25.,
+			..Default::default()
+		},
+		TextColor(Color::srgb(0.5, 0.5, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(5),
+            left: px(5),
+            ..Default::default()
+        },
+		ScoreDisplay,
+	));	
+}
+
+#[derive(Component)]
+struct ScoreDisplay;
+
+#[derive(Resource, Default)]
+struct ScoreStorage(usize);
+
+fn display_score(score: Res<ScoreStorage>, mut display: Single<&mut Text, With<ScoreDisplay>>) {
+	display.0 = format!("Score: {}", score.0);
 }
 
 fn setup(
@@ -186,7 +216,10 @@ fn handle_selection(
 
             commands
                 .entity(last_selected_tile.entity)
-                .insert(MovingTo::from(selected));
+                .insert(Moving {
+					from: last_selected,
+					to: selected,
+				});
 
             commands
                 .entity(selected_tile.entity)
@@ -194,7 +227,10 @@ fn handle_selection(
                 .and_modify(|mut state| *state = TileState::Moving);
             commands
                 .entity(selected_tile.entity)
-                .insert(MovingTo::from(last_selected));
+                .insert(Moving {
+					from: selected,
+					to: last_selected,
+				});
 
             let tmp = board[last_selected].tile;
             board[last_selected].tile = board[selected].tile;
@@ -300,6 +336,7 @@ fn handle_click(
 }
 
 fn check_board_for_matching(
+	mut score: ResMut<ScoreStorage>,
     board: Res<Board>,
     mut tiles_to_despawn: ResMut<TilesToDespawn>,
     tile_query: Query<&TileState>,
@@ -327,6 +364,7 @@ fn check_board_for_matching(
 
                 if form_by_row != tile.form {
                     if matched_by_row.len() >= 3 {
+						score.0 += 10 * matched_by_row.len();
                         tiles_to_despawn.0.append(&mut matched_by_row);
                     } else {
                         matched_by_row.clear();
@@ -351,6 +389,7 @@ fn check_board_for_matching(
 
                 if form_by_column != tile.form {
                     if matched_by_column.len() >= 3 {
+						score.0 += 10 * matched_by_column.len();
                         tiles_to_despawn.0.append(&mut matched_by_column);
                     } else {
                         matched_by_column.clear();
@@ -363,9 +402,11 @@ fn check_board_for_matching(
         }
 
         if matched_by_row.len() >= 3 {
+			score.0 += 10 * matched_by_row.len();
             tiles_to_despawn.0.append(&mut matched_by_row);
         }
         if matched_by_column.len() >= 3 {
+			score.0 += 10 * matched_by_column.len();
             tiles_to_despawn.0.append(&mut matched_by_column);
         }
     }
@@ -401,7 +442,10 @@ fn despawn_tiles(
 
                     commands
                         .entity(tile.entity)
-                        .insert(MovingTo::from((last_empty, col_id)));
+                        .insert(Moving {
+							from: (row_id, col_id).into(),
+							to: (last_empty, col_id).into(),
+						});
 
                     board[last_empty][col_id].tile = Some(tile);
                     last_empty += 1;
@@ -465,19 +509,22 @@ fn move_tiles(
     time: Res<Time>,
     mut commands: Commands,
     board: Res<Board>,
-    query: Query<(Entity, &mut Transform, &mut TileState, &MovingTo)>,
+    query: Query<(Entity, &mut Transform, &mut TileState, &Moving)>,
 ) {
-    for (entity, mut transform, mut state, moving_to) in query {
-        let target_coord = board.get_cell_coord(moving_to);
-        let direction = (target_coord - transform.translation.xy()).signum();
+    for (entity, mut transform, mut state, moving) in query {
+        let target_coord = board.get_cell_coord(moving.to);
 
-        let diff = TILE_VELOCITY * time.delta_secs();
-        transform.translation += direction.extend(0.) * diff;
-        if target_coord.abs_diff_eq(transform.translation.xy(), diff) {
+		let dx = (moving.to.col_id() as isize - moving.from.col_id() as isize).signum() as f32;
+		let dy = (moving.to.row_id() as isize - moving.from.row_id() as isize).signum() as f32;
+		let direction = Vec2::new(dx, dy);
+
+        let delta = TILE_VELOCITY * time.delta_secs();
+        transform.translation += direction.extend(0.) * delta;
+        if target_coord.abs_diff_eq(transform.translation.xy(), delta) {
             transform.translation.x = target_coord.x;
             transform.translation.y = target_coord.y;
             *state = TileState::Idle;
-            commands.entity(entity).remove::<MovingTo>();
+            commands.entity(entity).remove::<Moving>();
         }
     }
 }
@@ -515,24 +562,9 @@ struct TileBundle {
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
-struct MovingTo(BoardIndex);
-
-impl From<BoardIndex> for MovingTo {
-    fn from(idx: BoardIndex) -> Self {
-        Self(idx)
-    }
-}
-
-impl From<(usize, usize)> for MovingTo {
-    fn from(idx: (usize, usize)) -> Self {
-        Self(idx.into())
-    }
-}
-
-impl<'a> Into<BoardIndex> for &'a MovingTo {
-    fn into(self) -> BoardIndex {
-        self.0
-    }
+struct Moving {
+	from: BoardIndex,
+	to: BoardIndex,
 }
 
 #[derive(Resource)]
