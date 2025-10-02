@@ -1,9 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use bevy::{
-    ecs::system::Commands,
-    prelude::{Entity, Resource, Vec2},
-};
+use bevy::prelude::{Entity, Resource, Vec2};
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},

@@ -167,7 +167,6 @@ fn setup(
                         0.,
                     )),
                     visibility: Visibility::Inherited,
-                    state: TileState::Idle,
                 })
                 .add_child(select_area_entity)
                 .with_child((
@@ -193,7 +192,7 @@ fn handle_selection(
     mut board: ResMut<Board>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
-    tile_query: Query<&TileState>,
+    moving_tiles_qeury: Query<(), With<Moving>>,
 ) {
     while let Some(idx) = selection.to_unselect.pop() {
         set_selected(&mut commands, &board[idx], false);
@@ -202,16 +201,13 @@ fn handle_selection(
     if selection
         .selected
         .and_then(|idx| board[idx].tile.as_ref())
-        .is_none_or(|tile| {
-            tile_query
-                .get(tile.entity)
-                .ok()
-                .is_none_or(|state| *state != TileState::Idle)
-        })
+        .is_none_or(|tile| moving_tiles_qeury.get(tile.entity).is_ok())
     {
         selection.selected = None;
-    } else if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected)
-    {
+        return;
+    }
+
+    if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected) {
         let di = (last_selected.row_id() as isize - selected.row_id() as isize).abs();
         let dj = (last_selected.col_id() as isize - selected.col_id() as isize).abs();
 
@@ -231,7 +227,11 @@ fn handle_selection(
             set_selected(&mut commands, &board[last_selected], false);
             set_selected(&mut commands, &board[selected], true);
         }
-    } else if let Some(cell) = selection.selected.map(|idx| &board[idx]) {
+
+        return;
+    }
+
+    if let Some(cell) = selection.selected.map(|idx| &board[idx]) {
         set_selected(&mut commands, cell, true);
     }
 }
@@ -388,16 +388,6 @@ fn swap_tiles(board: &mut Board, commands: &mut Commands, idx1: BoardIndex, idx2
         return;
     };
 
-    commands
-        .entity(tile1.entity)
-        .entry::<TileState>()
-        .and_modify(|mut state| *state = TileState::Moving);
-
-    commands
-        .entity(tile2.entity)
-        .entry::<TileState>()
-        .and_modify(|mut state| *state = TileState::Moving);
-
     commands.entity(tile1.entity).insert(Moving {
         from: idx1,
         to: idx2,
@@ -416,7 +406,7 @@ fn check_board_for_matching(
     mut score: ResMut<ScoreStorage>,
     board: Res<Board>,
     mut tiles_to_despawn: ResMut<TilesToDespawn>,
-    tile_query: Query<&TileState>,
+    moving_tiles_query: Query<(), With<Moving>>,
 ) {
     let n = board.width().max(board.visible_height());
 
@@ -432,10 +422,7 @@ fn check_board_for_matching(
                 .and_then(|row| row.get(j))
                 .and_then(|cell| cell.tile.as_ref())
             {
-                if tile_query
-                    .get(tile.entity)
-                    .is_ok_and(|state| *state != TileState::Idle)
-                {
+                if moving_tiles_query.get(tile.entity).is_ok() {
                     break;
                 }
 
@@ -457,10 +444,7 @@ fn check_board_for_matching(
                 .and_then(|row| row.get(i))
                 .and_then(|cell| cell.tile.as_ref())
             {
-                if tile_query
-                    .get(tile.entity)
-                    .is_ok_and(|state| *state != TileState::Idle)
-                {
+                if moving_tiles_query.get(tile.entity).is_ok() {
                     break;
                 }
 
@@ -512,11 +496,6 @@ fn despawn_tiles(
         if let Some(mut last_empty) = last_empty {
             for row_id in last_empty..board.height() {
                 if let Some(tile) = board[row_id][col_id].tile.take() {
-                    commands
-                        .entity(tile.entity)
-                        .entry::<TileState>()
-                        .and_modify(|mut state| *state = TileState::Moving);
-
                     commands.entity(tile.entity).insert(Moving {
                         from: (row_id, col_id).into(),
                         to: (last_empty, col_id).into(),
@@ -562,7 +541,6 @@ fn spawn_tiles(mut board: ResMut<Board>, mut commands: Commands, game: Res<Game>
                             0.,
                         )),
                         visibility: Visibility::Inherited,
-                        state: TileState::Idle,
                     })
                     .add_child(select_area_entity)
                     .with_child((
@@ -586,9 +564,9 @@ fn move_tiles(
     time: Res<Time>,
     mut commands: Commands,
     board: Res<Board>,
-    query: Query<(Entity, &mut Transform, &mut TileState, &Moving)>,
+    query: Query<(Entity, &mut Transform, &Moving)>,
 ) {
-    for (entity, mut transform, mut state, moving) in query {
+    for (entity, mut transform, moving) in query {
         let target_coord = board.get_cell_coord(moving.to);
 
         let dx = (moving.to.col_id() as isize - moving.from.col_id() as isize).signum() as f32;
@@ -600,7 +578,6 @@ fn move_tiles(
         if target_coord.abs_diff_eq(transform.translation.xy(), delta) {
             transform.translation.x = target_coord.x;
             transform.translation.y = target_coord.y;
-            *state = TileState::Idle;
             commands.entity(entity).remove::<Moving>();
         }
     }
@@ -623,18 +600,10 @@ struct TilesToDespawn(Vec<BoardIndex>);
 #[derive(Component)]
 struct SelectArea;
 
-#[derive(Component, Default, Eq, PartialEq)]
-enum TileState {
-    #[default]
-    Idle,
-    Moving,
-}
-
 #[derive(Bundle)]
 struct TileBundle {
     transform: Transform,
     visibility: Visibility,
-    state: TileState,
 }
 
 #[derive(Component)]
