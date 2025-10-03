@@ -16,7 +16,6 @@ fn main() -> AppExit {
         .init_resource::<Board>()
         .init_resource::<Selection>()
         .init_resource::<TilesToDespawn>()
-        .init_resource::<Game>()
         .init_resource::<ScoreStorage>()
         .add_systems(Startup, (setup, setup_score))
         .add_systems(
@@ -69,16 +68,19 @@ fn display_score(score: Res<ScoreStorage>, mut display: Single<&mut Text, With<S
 fn setup(
     mut commands: Commands,
     mut board: ResMut<Board>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    game: Res<Game>,
     clear_color: Res<ClearColor>,
 ) {
+    let board_assets = BoardAssets::new(&mut meshes, &mut materials);
+
+    commands.insert_resource(board_assets.clone());
     commands.spawn(Camera2d);
 
     let hidden_board_height = board.height() - board.visible_height();
-    let hidden_board_rectangle_mesh = game.rectangle_mesh.clone();
+    let hidden_board_rectangle_mesh = board_assets.rectangle_mesh.clone();
     let background_material = materials.add(clear_color.0);
-    let cell_mesh = game.rectangle_mesh.clone();
+    let cell_mesh = board_assets.rectangle_mesh.clone();
     let cell_material = materials.add(Color::srgb(0.12, 0.12, 0.18));
 
     let hidden_board_rectangle_pos = {
@@ -108,11 +110,26 @@ fn setup(
         for j in 0..board.width() {
             let form = rand::random();
             let (form_mesh, form_material) = match form {
-                Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
-                Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
-                Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
-                Form::Rhombus => (game.rhombus_mesh.clone(), game.rhombus_material.clone()),
-                Form::Annulus => (game.annulus_mesh.clone(), game.annulus_material.clone()),
+                Form::Circle => (
+                    board_assets.circle_mesh.clone(),
+                    board_assets.circle_material.clone(),
+                ),
+                Form::Square => (
+                    board_assets.square_mesh.clone(),
+                    board_assets.square_material.clone(),
+                ),
+                Form::Triangle => (
+                    board_assets.triangle_mesh.clone(),
+                    board_assets.triangle_material.clone(),
+                ),
+                Form::Rhombus => (
+                    board_assets.rhombus_mesh.clone(),
+                    board_assets.rhombus_material.clone(),
+                ),
+                Form::Annulus => (
+                    board_assets.annulus_mesh.clone(),
+                    board_assets.annulus_material.clone(),
+                ),
             };
 
             let Vec2 { x, y } = board.get_cell_coord((i, j));
@@ -129,8 +146,8 @@ fn setup(
 
             let select_area_entity = commands
                 .spawn((
-                    Mesh2d(game.rectangle_mesh.clone()),
-                    MeshMaterial2d(game.select_area_material.clone()),
+                    Mesh2d(board_assets.rectangle_mesh.clone()),
+                    MeshMaterial2d(board_assets.select_area_material.clone()),
                     Transform::from_xyz(0., 0., 1.),
                     SelectArea,
                     Visibility::Hidden,
@@ -487,24 +504,39 @@ fn despawn_tiles(
     }
 }
 
-fn spawn_tiles(mut board: ResMut<Board>, mut commands: Commands, game: Res<Game>) {
+fn spawn_tiles(mut board: ResMut<Board>, mut commands: Commands, board_assets: Res<BoardAssets>) {
     for col_id in 0..board.width() {
         for row_id in board.visible_height()..board.height() {
             let form = rand::random();
             let (form_mesh, form_material) = match form {
-                Form::Circle => (game.circle_mesh.clone(), game.circle_material.clone()),
-                Form::Square => (game.square_mesh.clone(), game.square_material.clone()),
-                Form::Triangle => (game.triangle_mesh.clone(), game.triangle_material.clone()),
-                Form::Rhombus => (game.rhombus_mesh.clone(), game.rhombus_material.clone()),
-                Form::Annulus => (game.annulus_mesh.clone(), game.annulus_material.clone()),
+                Form::Circle => (
+                    board_assets.circle_mesh.clone(),
+                    board_assets.circle_material.clone(),
+                ),
+                Form::Square => (
+                    board_assets.square_mesh.clone(),
+                    board_assets.square_material.clone(),
+                ),
+                Form::Triangle => (
+                    board_assets.triangle_mesh.clone(),
+                    board_assets.triangle_material.clone(),
+                ),
+                Form::Rhombus => (
+                    board_assets.rhombus_mesh.clone(),
+                    board_assets.rhombus_material.clone(),
+                ),
+                Form::Annulus => (
+                    board_assets.annulus_mesh.clone(),
+                    board_assets.annulus_material.clone(),
+                ),
             };
             let Vec2 { x, y } = board.get_cell_coord((row_id, col_id));
 
             if board[row_id][col_id].tile.is_none() {
                 let select_area_entity = commands
                     .spawn((
-                        Mesh2d(game.rectangle_mesh.clone()),
-                        MeshMaterial2d(game.select_area_material.clone()),
+                        Mesh2d(board_assets.rectangle_mesh.clone()),
+                        MeshMaterial2d(board_assets.select_area_material.clone()),
                         Transform::from_xyz(0., 0., 1.),
                         SelectArea,
                         Visibility::Hidden,
@@ -595,8 +627,8 @@ struct Moving {
 #[component(storage = "SparseSet")]
 struct CheckMatchesOrSwap([BoardIndex; 2]);
 
-#[derive(Resource)]
-struct Game {
+#[derive(Resource, Clone)]
+struct BoardAssets {
     rectangle_mesh: Handle<Mesh>,
     select_area_material: Handle<ColorMaterial>,
     circle_mesh: Handle<Mesh>,
@@ -611,8 +643,8 @@ struct Game {
     annulus_material: Handle<ColorMaterial>,
 }
 
-impl FromWorld for Game {
-    fn from_world(world: &mut World) -> Self {
+impl BoardAssets {
+    fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<ColorMaterial>) -> Self {
         let rectangle_mesh;
         let select_area_material;
         let circle_mesh;
@@ -627,8 +659,6 @@ impl FromWorld for Game {
         let annulus_material;
 
         {
-            let mut meshes = world.get_resource_mut::<Assets<Mesh>>().unwrap();
-
             rectangle_mesh = meshes.add(Rectangle::default());
             circle_mesh = meshes.add(Circle::new(0.4));
             square_mesh = meshes.add(Rectangle::from_size(Vec2::splat(0.8)));
@@ -642,8 +672,6 @@ impl FromWorld for Game {
         }
 
         {
-            let mut materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
-
             // @FIXME Вернуть альфа канал 0.75
             // С параметром альфа канала выглядит как будто область выделения находится над фигурой.
             select_area_material =
