@@ -1,5 +1,3 @@
-use bevy::{math::prelude::*, prelude::*};
-
 mod board;
 
 use board::{Board, BoardIndex, Cell, Form, TILE_VELOCITY, Tile};
@@ -186,6 +184,12 @@ fn handle_selection(
     }
 
     if let Some((last_selected, selected)) = selection.last_selected.zip(selection.selected) {
+        if last_selected == selected {
+            set_selected(&mut commands, &board[selected], false);
+            selection.last_selected = None;
+            selection.selected = None;
+            return;
+        }
         let di = (last_selected.row_id() as isize - selected.row_id() as isize).abs();
         let dj = (last_selected.col_id() as isize - selected.col_id() as isize).abs();
 
@@ -463,13 +467,7 @@ fn despawn_tiles(
     }
 
     for col_id in 0..board.width() {
-        let last_empty = (0..board.visible_height()).find_map(|i| {
-            if board[i][col_id].tile.is_none() {
-                Some(i)
-            } else {
-                None
-            }
-        });
+        let last_empty = (0..board.visible_height()).find(|i| board[*i][col_id].tile.is_none());
 
         if let Some(mut last_empty) = last_empty {
             for row_id in last_empty..board.height() {
