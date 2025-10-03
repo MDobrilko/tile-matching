@@ -1,3 +1,5 @@
+use bevy::{math::prelude::*, prelude::*};
+
 mod board;
 
 use board::{Board, BoardIndex, Cell, Form, TILE_VELOCITY, Tile};
